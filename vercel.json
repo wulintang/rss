@@ -1,8 +1,8 @@
 {
   "functions": {
     "api/rss.js": {
-      "memory": 512,    
-      "maxDuration": 180  
+      "memory": 1024,    
+      "maxDuration": 300  
     }
   }
 }
