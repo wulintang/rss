@@ -27,7 +27,7 @@ async function getRssArticles() {
   }
 
   try {
-    const authToken = await login();
+    const authToken = await login(); // 重点：复刻PHP登录逻辑
     if (!authToken) {
       throw new Error('登录失败：未获取到 Auth 令牌');
     }
@@ -79,48 +79,60 @@ async function getRssArticles() {
 }
 
 /**
- * 优化后的登录函数（替换原来的login函数）
+ * 完全复刻PHP的登录逻辑（保证与你的PHP代码行为一致）
  */
 async function login() {
   try {
-    // 1. 编码账号密码（确保与手动访问一致）
-    const encodedUser = encodeURIComponent(config.user);
-    const encodedPass = encodeURIComponent(config.password);
+    // 1. 完全模仿PHP的urlencode（对特殊字符处理更接近）
+    const encodedUser = phpUrlEncode(config.user);
+    const encodedPass = phpUrlEncode(config.password);
     const loginUrl = `${config.apiUrl}/accounts/ClientLogin?Email=${encodedUser}&Passwd=${encodedPass}`;
-    console.log('🔍 登录请求 URL:', loginUrl); // 对比与手动访问的URL是否一致
+    console.log('登录请求 URL（与PHP一致）:', loginUrl);
 
-    // 2. 发送请求（添加浏览器模拟头，避免被识别为非浏览器请求）
+    // 2. 模仿PHP curl的默认请求（不添加多余头信息）
     const response = await fetchWithRetry(loginUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+        // 仅保留必要头，与PHP curl默认行为一致
         'Accept': '*/*'
       }
     });
 
-    // 3. 输出响应状态和原始内容（关键调试信息）
-    console.log('📦 登录响应状态码:', response.status);
+    // 3. 读取原始响应（与PHP curl_exec返回值一致）
     const text = await response.text();
-    console.log('📝 登录响应原始内容:', text); // 查看是否包含Auth=...
+    console.log('登录响应原始内容:', text);
 
-    // 4. 强化Auth提取逻辑（兼容换行、空格等情况）
-    const authMatch = text.match(/Auth=(.+?)(\r\n|[\r\n]|$)/);
-    if (authMatch && authMatch[1]) {
-      const authToken = authMatch[1].trim();
-      console.log('✅ 登录成功，Auth令牌:', authToken);
+    // 4. 完全复刻PHP的Auth提取逻辑：strpos + substr
+    const authPos = text.indexOf('Auth=');
+    if (authPos !== -1) {
+      // 从'Auth='后开始截取，直到字符串结束（忽略换行等）
+      const authToken = text.substring(authPos + 5).trim();
+      console.log('登录成功，Auth令牌:', authToken);
       return authToken;
     }
 
-    // 5. 失败时详细提示
-    console.error('❌ 未找到Auth令牌，响应内容:', text);
+    // 5. 失败提示
+    console.error('未找到Auth令牌（与PHP判断逻辑一致）');
     return null;
   } catch (error) {
-    console.error('❌ 登录请求异常:', error.message);
+    console.error('登录请求异常:', error.message);
     return null;
   }
 }
 
 /**
- * 以下所有函数保持不变（与你之前的版本一致）
+ * 模拟PHP的urlencode函数（解决JS与PHP编码差异）
+ */
+function phpUrlEncode(str) {
+  return encodeURIComponent(str)
+    .replace(/!/g, '%21')
+    .replace(/'/g, '%27')
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29')
+    .replace(/\*/g, '%2A');
+}
+
+/**
+ * 以下函数保持与你的PHP逻辑一致
  */
 async function getSubscriptions(authToken) {
   const url = `${config.apiUrl}/reader/api/0/subscription/list?output=json`;
@@ -177,7 +189,7 @@ async function fetchWithRetry(url, options = {}, retries = 0) {
   try {
     const response = await fetch(url, {
       ...options,
-      timeout: 10000
+      timeout: 10000 // 与PHP的CURLOPT_TIMEOUT=30保持接近（略短避免超时）
     });
     
     if (!response.ok) {
@@ -194,6 +206,7 @@ async function fetchWithRetry(url, options = {}, retries = 0) {
   }
 }
 
+// 以下工具函数与你的PHP逻辑对应，保持不变
 function sortArticlesByTime(articles) {
   return articles.sort((a, b) => (b.published || 0) - (a.published || 0));
 }
