@@ -1,5 +1,11 @@
 // 工具函数：处理 RSS 登录、数据获取和格式化
 const fetch = require('node-fetch');
+const { CookieJar } = require('tough-cookie'); // 新增：处理Cookie，需安装 npm install tough-cookie
+const fetchCookie = require('fetch-cookie'); // 新增：自动处理Cookie，需安装 npm install fetch-cookie
+
+// 创建带Cookie的fetch实例（模仿PHP curl自动处理Cookie）
+const cookieJar = new CookieJar();
+const fetchWithCookie = fetchCookie(fetch, cookieJar);
 
 // 缓存逻辑
 let cache = {
@@ -27,7 +33,7 @@ async function getRssArticles() {
   }
 
   try {
-    const authToken = await login(); // 重点：复刻PHP登录逻辑
+    const authToken = await login();
     if (!authToken) {
       throw new Error('登录失败：未获取到 Auth 令牌');
     }
@@ -79,39 +85,40 @@ async function getRssArticles() {
 }
 
 /**
- * 完全复刻PHP的登录逻辑（保证与你的PHP代码行为一致）
+ * 完全复刻PHP curl的登录逻辑（解决403问题）
  */
 async function login() {
   try {
-    // 1. 完全模仿PHP的urlencode（对特殊字符处理更接近）
+    // 1. 完全模仿PHP的urlencode
     const encodedUser = phpUrlEncode(config.user);
     const encodedPass = phpUrlEncode(config.password);
     const loginUrl = `${config.apiUrl}/accounts/ClientLogin?Email=${encodedUser}&Passwd=${encodedPass}`;
-    console.log('登录请求 URL（与PHP一致）:', loginUrl);
+    console.log('登录请求 URL:', loginUrl);
 
-    // 2. 模仿PHP curl的默认请求（不添加多余头信息）
-    const response = await fetchWithRetry(loginUrl, {
-      headers: {
-        // 仅保留必要头，与PHP curl默认行为一致
-        'Accept': '*/*'
-      }
-    });
+    // 2. 模仿PHP curl的默认请求头（关键：添加浏览器标识）
+    const headers = {
+      'User-Agent': 'curl/7.68.0', // 用curl的默认UA，与PHP curl一致
+      'Accept': '*/*',
+      'Referer': 'https://rss.dao.js.cn/' // 添加来源页，模拟正常访问
+    };
 
-    // 3. 读取原始响应（与PHP curl_exec返回值一致）
+    // 3. 用带Cookie的fetch发送请求（模仿PHP自动处理Cookie）
+    const response = await fetchWithRetry(loginUrl, { headers }, fetchWithCookie);
+    
+    // 4. 检查状态码（PHP curl不会主动判断状态码，这里兼容）
+    console.log('登录响应状态码:', response.status);
     const text = await response.text();
     console.log('登录响应原始内容:', text);
 
-    // 4. 完全复刻PHP的Auth提取逻辑：strpos + substr
+    // 5. 提取Auth令牌（与PHP逻辑完全一致）
     const authPos = text.indexOf('Auth=');
     if (authPos !== -1) {
-      // 从'Auth='后开始截取，直到字符串结束（忽略换行等）
       const authToken = text.substring(authPos + 5).trim();
       console.log('登录成功，Auth令牌:', authToken);
       return authToken;
     }
 
-    // 5. 失败提示
-    console.error('未找到Auth令牌（与PHP判断逻辑一致）');
+    console.error('未找到Auth令牌');
     return null;
   } catch (error) {
     console.error('登录请求异常:', error.message);
@@ -120,27 +127,41 @@ async function login() {
 }
 
 /**
- * 模拟PHP的urlencode函数（解决JS与PHP编码差异）
+ * 带Cookie支持的重试请求函数
  */
-function phpUrlEncode(str) {
-  return encodeURIComponent(str)
-    .replace(/!/g, '%21')
-    .replace(/'/g, '%27')
-    .replace(/\(/g, '%28')
-    .replace(/\)/g, '%29')
-    .replace(/\*/g, '%2A');
+async function fetchWithRetry(url, options = {}, fetchImpl = fetch, retries = 0) {
+  try {
+    const response = await fetchImpl(url, {
+      ...options,
+      timeout: 15000, // 延长超时，确保请求完成
+      redirect: 'follow' // 自动跟随重定向（PHP curl默认行为）
+    });
+    
+    // 即使状态码非200也返回内容（PHP curl不会因403拒绝返回内容）
+    return response;
+  } catch (error) {
+    if (retries < config.maxRetries) {
+      console.log(`请求 ${url} 失败，重试 ${retries + 1}/${config.maxRetries}`);
+      await sleep(1000 * (retries + 1));
+      return fetchWithRetry(url, options, fetchImpl, retries + 1);
+    }
+    throw error;
+  }
 }
 
 /**
- * 以下函数保持与你的PHP逻辑一致
+ * 以下函数保持不变，仅调整fetch为带Cookie的版本
  */
 async function getSubscriptions(authToken) {
   const url = `${config.apiUrl}/reader/api/0/subscription/list?output=json`;
   
   try {
     const response = await fetchWithRetry(url, {
-      headers: { 'Authorization': `GoogleLogin auth=${authToken}` }
-    });
+      headers: { 
+        'Authorization': `GoogleLogin auth=${authToken}`,
+        'User-Agent': 'curl/7.68.0' // 保持UA一致
+      }
+    }, fetchWithCookie);
     const data = await response.json();
     return data.subscriptions || [];
   } catch (error) {
@@ -154,14 +175,27 @@ async function fetchArticles(authToken, streamId) {
   
   try {
     const response = await fetchWithRetry(url, {
-      headers: { 'Authorization': `GoogleLogin auth=${authToken}` }
-    });
+      headers: { 
+        'Authorization': `GoogleLogin auth=${authToken}`,
+        'User-Agent': 'curl/7.68.0' // 保持UA一致
+      }
+    }, fetchWithCookie);
     const data = await response.json();
     return data.items ? sortArticlesByTime(data.items) : [];
   } catch (error) {
     console.error(`获取订阅 ${streamId} 失败：`, error.message);
     return [];
   }
+}
+
+// 其他工具函数（与之前一致）
+function phpUrlEncode(str) {
+  return encodeURIComponent(str)
+    .replace(/!/g, '%21')
+    .replace(/'/g, '%27')
+    .replace(/\(/g, '%28')
+    .replace(/\)/g, '%29')
+    .replace(/\*/g, '%2A');
 }
 
 function formatArticles(articles, subscription) {
@@ -185,28 +219,6 @@ function formatArticles(articles, subscription) {
   });
 }
 
-async function fetchWithRetry(url, options = {}, retries = 0) {
-  try {
-    const response = await fetch(url, {
-      ...options,
-      timeout: 10000 // 与PHP的CURLOPT_TIMEOUT=30保持接近（略短避免超时）
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP 状态码错误: ${response.status}`);
-    }
-    return response;
-  } catch (error) {
-    if (retries < config.maxRetries) {
-      console.log(`请求 ${url} 失败，重试 ${retries + 1}/${config.maxRetries}`);
-      await sleep(1000 * (retries + 1));
-      return fetchWithRetry(url, options, retries + 1);
-    }
-    throw error;
-  }
-}
-
-// 以下工具函数与你的PHP逻辑对应，保持不变
 function sortArticlesByTime(articles) {
   return articles.sort((a, b) => (b.published || 0) - (a.published || 0));
 }
