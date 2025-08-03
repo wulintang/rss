@@ -79,40 +79,48 @@ async function getRssArticles() {
 }
 
 /**
- * 修复登录逻辑：确保完整编码 + 正确解析 Auth 令牌
+ * 优化后的登录函数（替换原来的login函数）
  */
 async function login() {
   try {
-    // 1. 确保账号密码完全编码（处理特殊字符）
+    // 1. 编码账号密码（确保与手动访问一致）
     const encodedUser = encodeURIComponent(config.user);
     const encodedPass = encodeURIComponent(config.password);
     const loginUrl = `${config.apiUrl}/accounts/ClientLogin?Email=${encodedUser}&Passwd=${encodedPass}`;
-    console.log('登录请求 URL:', loginUrl); // 调试用：查看编码后的 URL
+    console.log('🔍 登录请求 URL:', loginUrl); // 对比与手动访问的URL是否一致
 
-    // 2. 发送请求并获取原始响应文本
-    const response = await fetchWithRetry(loginUrl);
+    // 2. 发送请求（添加浏览器模拟头，避免被识别为非浏览器请求）
+    const response = await fetchWithRetry(loginUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+        'Accept': '*/*'
+      }
+    });
+
+    // 3. 输出响应状态和原始内容（关键调试信息）
+    console.log('📦 登录响应状态码:', response.status);
     const text = await response.text();
-    console.log('登录响应原始内容:', text); // 调试用：查看完整响应
+    console.log('📝 登录响应原始内容:', text); // 查看是否包含Auth=...
 
-    // 3. 精准解析 Auth 令牌（兼容换行或其他分隔符）
-    const authMatch = text.match(/Auth=(.+)/);
+    // 4. 强化Auth提取逻辑（兼容换行、空格等情况）
+    const authMatch = text.match(/Auth=(.+?)(\r\n|[\r\n]|$)/);
     if (authMatch && authMatch[1]) {
       const authToken = authMatch[1].trim();
-      console.log('登录成功，获取到 Auth 令牌');
+      console.log('✅ 登录成功，Auth令牌:', authToken);
       return authToken;
     }
 
-    // 4. 登录失败时输出详细原因
-    console.error('登录响应中未找到 Auth 令牌，响应内容:', text);
+    // 5. 失败时详细提示
+    console.error('❌ 未找到Auth令牌，响应内容:', text);
     return null;
   } catch (error) {
-    console.error('登录请求网络失败：', error.message);
+    console.error('❌ 登录请求异常:', error.message);
     return null;
   }
 }
 
 /**
- * 其他函数保持不变
+ * 以下所有函数保持不变（与你之前的版本一致）
  */
 async function getSubscriptions(authToken) {
   const url = `${config.apiUrl}/reader/api/0/subscription/list?output=json`;
