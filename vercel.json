@@ -1,8 +1,8 @@
 {
   "functions": {
     "api/rss.js": {
-      "memory": 512,        // 增加内存到512MB
-      "maxDuration": 180    // 超时延长到180秒（3分钟）
+      "memory": 512,    
+      "maxDuration": 180  
     }
   }
 }
