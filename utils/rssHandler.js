@@ -1,46 +1,42 @@
 // 工具函数：处理 RSS 登录、数据获取和格式化
 const fetch = require('node-fetch');
 
-// 缓存逻辑（内存缓存，Vercel 函数实例复用期间有效）
+// 缓存逻辑
 let cache = {
   data: null,
   expireTime: 0
 };
 
-// 配置（从环境变量读取敏感信息）
+// 配置（从环境变量读取）
 const config = {
   apiUrl: 'https://rss.dao.js.cn/p/api/greader.php',
   user: process.env.RSS_USER,
   password: process.env.RSS_PASS,
-  cacheTTL: 300,                    // 缓存有效期（5分钟）
-  batchSize: 10,                    // 每批处理的订阅数量
-  maxRetries: 3                     // 请求失败重试次数
+  cacheTTL: 300,
+  batchSize: 10,
+  maxRetries: 3
 };
 
 /**
  * 主函数：获取并处理所有订阅文章
  */
 async function getRssArticles() {
-  // 检查缓存是否有效
   if (cache.data && Date.now() < cache.expireTime) {
     console.log('使用缓存数据');
     return cache.data;
   }
 
   try {
-    // 1. 登录获取认证令牌
     const authToken = await login();
     if (!authToken) {
-      throw new Error('登录失败');
+      throw new Error('登录失败：未获取到 Auth 令牌');
     }
 
-    // 2. 获取所有订阅源
     const subscriptions = await getSubscriptions(authToken);
     if (!subscriptions || subscriptions.length === 0) {
       throw new Error('未获取到订阅列表');
     }
 
-    // 3. 分批处理订阅
     const allArticles = {};
     const batches = chunkArray(subscriptions, config.batchSize);
 
@@ -51,28 +47,22 @@ async function getRssArticles() {
         const streamId = sub.id;
         const siteName = sub.title || '未知站点';
         
-        // 4. 获取该订阅的文章
         const articles = await fetchArticles(authToken, streamId);
         if (!articles || articles.length === 0) {
           console.log(`订阅 ${siteName} 无新内容`);
           continue;
         }
 
-        // 5. 格式化文章数据
         const formatted = formatArticles(articles, sub);
-        
-        // 6. 合并到结果（每个站点保留最新10条）
         allArticles[siteName] = [
           ...formatted, 
           ...(allArticles[siteName] || [])
         ].slice(0, 10);
       }
 
-      // 每批处理后短暂休眠
       await sleep(500);
     }
 
-    // 更新缓存
     cache.data = allArticles;
     cache.expireTime = Date.now() + config.cacheTTL * 1000;
     console.log('数据处理完成，已更新缓存');
@@ -80,7 +70,6 @@ async function getRssArticles() {
 
   } catch (error) {
     console.error('处理失败：', error.message);
-    // 缓存未过期时，返回旧数据
     if (cache.data) {
       console.log('返回缓存的旧数据');
       return cache.data;
@@ -90,27 +79,40 @@ async function getRssArticles() {
 }
 
 /**
- * 登录并获取认证令牌
+ * 修复登录逻辑：确保完整编码 + 正确解析 Auth 令牌
  */
 async function login() {
-  const loginUrl = `${config.apiUrl}/accounts/ClientLogin?Email=${encodeURIComponent(config.user)}&Passwd=${encodeURIComponent(config.password)}`;
-  
   try {
+    // 1. 确保账号密码完全编码（处理特殊字符）
+    const encodedUser = encodeURIComponent(config.user);
+    const encodedPass = encodeURIComponent(config.password);
+    const loginUrl = `${config.apiUrl}/accounts/ClientLogin?Email=${encodedUser}&Passwd=${encodedPass}`;
+    console.log('登录请求 URL:', loginUrl); // 调试用：查看编码后的 URL
+
+    // 2. 发送请求并获取原始响应文本
     const response = await fetchWithRetry(loginUrl);
     const text = await response.text();
-    
-    if (text.includes('Auth=')) {
-      return text.split('Auth=')[1].trim();
+    console.log('登录响应原始内容:', text); // 调试用：查看完整响应
+
+    // 3. 精准解析 Auth 令牌（兼容换行或其他分隔符）
+    const authMatch = text.match(/Auth=(.+)/);
+    if (authMatch && authMatch[1]) {
+      const authToken = authMatch[1].trim();
+      console.log('登录成功，获取到 Auth 令牌');
+      return authToken;
     }
+
+    // 4. 登录失败时输出详细原因
+    console.error('登录响应中未找到 Auth 令牌，响应内容:', text);
     return null;
   } catch (error) {
-    console.error('登录请求失败：', error.message);
+    console.error('登录请求网络失败：', error.message);
     return null;
   }
 }
 
 /**
- * 获取所有订阅源列表
+ * 其他函数保持不变
  */
 async function getSubscriptions(authToken) {
   const url = `${config.apiUrl}/reader/api/0/subscription/list?output=json`;
@@ -127,9 +129,6 @@ async function getSubscriptions(authToken) {
   }
 }
 
-/**
- * 获取单个订阅源的文章（支持重试）
- */
 async function fetchArticles(authToken, streamId) {
   const url = `${config.apiUrl}/reader/api/0/stream/contents/${encodeURIComponent(streamId)}?n=1000`;
   
@@ -145,9 +144,6 @@ async function fetchArticles(authToken, streamId) {
   }
 }
 
-/**
- * 格式化文章数据
- */
 function formatArticles(articles, subscription) {
   const iconUrl = `https://rss.dao.js.cn/p/${subscription.iconUrl.split('/').pop()}`;
   
@@ -169,9 +165,6 @@ function formatArticles(articles, subscription) {
   });
 }
 
-/**
- * 带重试的 fetch 请求
- */
 async function fetchWithRetry(url, options = {}, retries = 0) {
   try {
     const response = await fetch(url, {
@@ -193,16 +186,10 @@ async function fetchWithRetry(url, options = {}, retries = 0) {
   }
 }
 
-/**
- * 按发布时间降序排序文章
- */
 function sortArticlesByTime(articles) {
   return articles.sort((a, b) => (b.published || 0) - (a.published || 0));
 }
 
-/**
- * 分割数组为批次
- */
 function chunkArray(arr, size) {
   const chunks = [];
   for (let i = 0; i < arr.length; i += size) {
@@ -211,16 +198,10 @@ function chunkArray(arr, size) {
   return chunks;
 }
 
-/**
- * 休眠指定毫秒数
- */
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/**
- * 去除 HTML 标签
- */
 function stripTags(html) {
   return html.replace(/<[^>]*>?/gm, '');
 }
